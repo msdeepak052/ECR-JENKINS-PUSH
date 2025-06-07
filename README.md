@@ -102,3 +102,68 @@ docker.withRegistry("https://your-ecr-url") {
 ``` 
 
 This eliminates key management!
+
+
+```Jenkinsfile
+
+pipeline {
+    agent any
+    environment {
+        AWS_REGION = 'ap-south-1'
+        ECR_REPO = 'app/tour-travels-webapp'
+        APP_NAME = 'tour-travels-webapp'
+        VERSION = "1.0.${BUILD_NUMBER}"
+    }
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    // Get ECR URL once and store in env
+                    env.ECR_URL = sh(
+                        script: "aws ecr describe-repositories --repository-names ${ECR_REPO} --region ${AWS_REGION} --query 'repositories[0].repositoryUri' --output text",
+                        returnStdout: true
+                    ).trim()
+                    env.IMAGE_URI = "${env.ECR_URL}:${env.VERSION}"
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                script {
+                    // Build ONCE and store the Docker image object
+                    env.dockerImage = docker.build("${env.IMAGE_URI}", 
+                        "--build-arg APP_NAME=${env.APP_NAME} ."
+                    )
+                }
+            }
+        }
+
+        stage('Trivy Scan') {
+            steps {
+                script {
+                    // Scan the already-built image by tag
+                    sh "trivy image --exit-code 1 --ignore-unfixed ${env.IMAGE_URI}"
+                }
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                script {
+                    // Authenticate and push using the stored image reference
+                    docker.withRegistry(
+                        "https://${env.ECR_URL.split(':')[0]}", 
+                        'ecr:ap-south-1:aws-credentials'
+                    ) {
+                        env.dockerImage.push()
+                        env.dockerImage.push('latest')
+                    }
+                }
+            }
+        }
+    }
+}
+
+```
+
